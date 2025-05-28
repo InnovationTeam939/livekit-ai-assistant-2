@@ -17,6 +17,9 @@ import re
 import logging
 import sys
 import asyncio
+import threading
+from flask import Flask, jsonify
+import signal
 
 # Set up logging
 logging.basicConfig(
@@ -265,17 +268,21 @@ class CallSession:
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
+# Global variables for managing the agent
+agent_task = None
+agent_running = False
+active_sessions = {}
+
 async def entrypoint(ctx: JobContext):
     """Main entry point for the LiveKit agent - handles multiple calls"""
+    global agent_running, active_sessions
     logger.info("Starting LiveKit agent...")
-    
-    # Keep track of active sessions
-    active_sessions = {}
     
     try:
         # Connect to the room
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
         logger.info("Connected to room, waiting for participants...")
+        agent_running = True
         
         @ctx.room.on("participant_connected")
         def on_participant_connected(participant: rtc.RemoteParticipant):
@@ -301,7 +308,7 @@ async def entrypoint(ctx: JobContext):
                 del active_sessions[participant.identity]
         
         # Keep the agent running
-        while True:
+        while agent_running:
             try:
                 await asyncio.sleep(1)
                 
@@ -316,9 +323,6 @@ async def entrypoint(ctx: JobContext):
                         await active_sessions[identity].cleanup()
                         del active_sessions[identity]
                         
-            except KeyboardInterrupt:
-                logger.info("Received shutdown signal")
-                break
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
                 await asyncio.sleep(5)  # Wait before retrying
@@ -336,6 +340,7 @@ async def entrypoint(ctx: JobContext):
         if cleanup_tasks:
             await asyncio.gather(*cleanup_tasks, return_exceptions=True)
         
+        agent_running = False
         logger.info("Agent shutdown complete")
 
 async def initialize_session(session: CallSession, participant):
@@ -389,32 +394,118 @@ def test_database_connection():
         logger.error(f"Database connection test error: {e}")
         return False
 
-def main():
-    """Main function to run the agent."""
-    logger.info("Initializing LiveKit agent application...")
+def run_agent():
+    """Run the LiveKit agent in a separate thread"""
+    global agent_task
     
     try:
+        logger.info("Starting LiveKit agent in background thread...")
+        
         # Validate environment variables
         validate_environment()
         
         # Test database connection
         if not test_database_connection():
             logger.error("Database connection failed. Please check your DATABASE_URL.")
-            sys.exit(1)
+            return
         
         logger.info("Pre-flight checks passed. Starting LiveKit agent...")
         
         # Run the LiveKit agent
         cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
         
-    except KeyboardInterrupt:
-        logger.info("Agent stopped by user")
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        sys.exit(1)
     except Exception as e:
         logger.error(f"Agent failed with error: {str(e)}")
+
+# Flask web server for health checks and status
+app = Flask(__name__)
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Render.com"""
+    global agent_running
+    
+    try:
+        # Test database connection
+        db_healthy = test_database_connection()
+        
+        status = {
+            "status": "healthy" if (agent_running and db_healthy) else "unhealthy",
+            "agent_running": agent_running,
+            "database_connected": db_healthy,
+            "active_sessions": len(active_sessions),
+            "timestamp": asyncio.get_event_loop().time() if agent_running else None
+        }
+        
+        return jsonify(status), 200 if status["status"] == "healthy" else 503
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({"status": "unhealthy", "error": str(e)}), 503
+
+@app.route('/status')
+def status():
+    """Status endpoint"""
+    global agent_running, active_sessions
+    
+    return jsonify({
+        "agent_running": agent_running,
+        "active_sessions": len(active_sessions),
+        "session_ids": list(active_sessions.keys())
+    })
+
+@app.route('/')
+def index():
+    """Root endpoint"""
+    return jsonify({
+        "service": "LiveKit Voice Assistant",
+        "status": "running" if agent_running else "stopped",
+        "endpoints": ["/health", "/status"]
+    })
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    global agent_running
+    logger.info(f"Received signal {signum}, shutting down...")
+    agent_running = False
+    sys.exit(0)
+
+def main():
+    """Main function to run both the web server and agent."""
+    global agent_task
+    
+    logger.info("Initializing LiveKit agent web service...")
+    
+    try:
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Start the LiveKit agent in a separate thread
+        agent_thread = threading.Thread(target=run_agent, daemon=True)
+        agent_thread.start()
+        
+        # Give the agent a moment to start
+        import time
+        time.sleep(2)
+        
+        # Get port from environment or default to 10000
+        port = int(os.getenv('PORT', 10000))
+        
+        logger.info(f"Starting Flask web server on port {port}...")
+        
+        # Run the Flask app
+        app.run(host='0.0.0.0', port=port, debug=False)
+        
+    except KeyboardInterrupt:
+        logger.info("Service stopped by user")
+    except Exception as e:
+        logger.error(f"Service failed with error: {str(e)}")
         raise
+    finally:
+        global agent_running
+        agent_running = False
+        logger.info("Service shutdown complete")
 
 if __name__ == "__main__":
     main()

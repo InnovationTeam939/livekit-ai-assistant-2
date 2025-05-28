@@ -20,7 +20,7 @@ services:
       targetCPUPercent: 70
       targetMemoryPercent: 70
 
-  # Backend Service (LiveKit Agent) - Changed to web service
+  # Backend Service (LiveKit Agent) - Web service with HTTP endpoints
   - type: web
     name: moving-backend
     repo: https://github.com/InnovationTeam939/livekit-ai-assistant-2.git
@@ -30,7 +30,7 @@ services:
     region: virginia
     
     buildCommand: pip install -r requirements.txt
-    startCommand: python agent.py dev
+    startCommand: python agent.py
     
     envVars:
       - fromGroup: livekit-voice-assistant-env
