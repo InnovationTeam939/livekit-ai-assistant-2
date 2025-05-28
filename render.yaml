@@ -1,0 +1,55 @@
+services:
+  # Frontend Service (Streamlit Dashboard)
+  - type: web
+    name: moving-frontend
+    repo: https://github.com/InnovationTeam939/streamlit-ai-assistant.git
+    rootDir: .
+    runtime: python
+    plan: starter
+    region: virginia
+    
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run frontend.py --server.port=$PORT --server.address=0.0.0.0
+    
+    envVars:
+      - fromGroup: livekit-voice-assistant-env
+    
+    scaling:
+      minInstances: 1
+      maxInstances: 2
+      targetCPUPercent: 70
+      targetMemoryPercent: 70
+
+  # Backend Service (LiveKit Agent) - Changed to web service
+  - type: web
+    name: moving-backend
+    repo: https://github.com/InnovationTeam939/livekit-ai-assistant.git
+    rootDir: .
+    runtime: python
+    plan: starter
+    region: virginia
+    
+    buildCommand: pip install -r requirements.txt
+    startCommand: python agent.py dev
+    
+    envVars:
+      - fromGroup: livekit-voice-assistant-env
+      - key: PORT
+        value: 10000
+    
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+      targetCPUPercent: 70
+      targetMemoryPercent: 70
+    
+    # Health check configuration
+    healthCheckPath: /health
+    
+    # Disk configuration for logs
+    disk:
+      name: agent-logs
+      mountPath: /app/logs
+      sizeGB: 1
+
+version: "1"
