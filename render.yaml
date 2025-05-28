@@ -23,7 +23,7 @@ services:
   # Backend Service (LiveKit Agent) - Changed to web service
   - type: web
     name: moving-backend
-    repo: https://github.com/InnovationTeam939/livekit-ai-assistant.git
+    repo: https://github.com/InnovationTeam939/livekit-ai-assistant-2.git
     rootDir: .
     runtime: python
     plan: starter
